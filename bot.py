@@ -16,6 +16,7 @@ import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from content import POSTS
+from channel_translate import fetch_source_posts, translate_to_amharic
 
 # =========================================================
 # CONFIG - Eziya laye configuration'wochn adirgu
@@ -47,6 +48,25 @@ ANTHROPIC_MODEL = "claude-sonnet-5"
 # lekelakay yiyazal. Bicha yalefu N rieswoch bicha yizeker.
 AI_TOPIC_HISTORY_LIMIT = 40
 
+# ---------------------------------------------------------
+# SOURCE CHANNEL TRANSLATION (optional) - kelela public channel
+# addis post gimito wede Amarigna yitergimal, wede @ibnuabbas_hara yiletfal
+# ---------------------------------------------------------
+# Ke "https://t.me/Awraq_Alyasmin" bicha ye"Awraq_Alyasmin" ken new
+# yemiferelgew (@ weyim t.me/ sayhon).
+SOURCE_CHANNEL_USERNAME = "Awraq_Alyasmin"
+
+# Sesat sesat (be'iminet) ye'sechid channel'un lemayet - polling interval
+TRANSLATE_CHECK_INTERVAL_MINUTES = 15
+
+# Ke'iyalu translated post gar yemiketel attribution mesetr
+TRANSLATE_ATTRIBUTION = "\n\n🔗 ምንጭ፦ @Awraq_Alyasmin"
+
+# Yihe tirgum post'wochn yemileTfew wediya adis bot ("Translator Abubeker
+# Abdu") token - ke ne'baru bot yileyal. Yihe bot @ibnuabbas_hara channel
+# admin (Post Messages) mehonu yasfeligal.
+TRANSLATOR_BOT_TOKEN = os.environ.get("TRANSLATOR_BOT_TOKEN", "")
+
 # =========================================================
 # LOGGING
 # =========================================================
@@ -70,10 +90,11 @@ def load_state():
                 data = json.load(f)
                 data.setdefault("index", 0)
                 data.setdefault("ai_topic_history", [])
+                data.setdefault("last_source_msg_id", 0)
                 return data
         except Exception:
             logger.warning("State file could not be read, kesera enjemralen.")
-    return {"index": 0, "ai_topic_history": []}
+    return {"index": 0, "ai_topic_history": [], "last_source_msg_id": 0}
 
 
 def save_state(state):
@@ -85,15 +106,16 @@ def save_state(state):
 # TELEGRAM SEND
 # =========================================================
 
-def send_message(text: str) -> bool:
-    if not BOT_TOKEN or BOT_TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
+def send_message(text: str, token: str = None) -> bool:
+    token = token or BOT_TOKEN
+    if not token or token == "PASTE_YOUR_BOT_TOKEN_HERE":
         logger.error(
             "BOT_TOKEN alteseTem! Environment variable BOT_TOKEN sisu weyim "
             "bot.py wisit teteka."
         )
         return False
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": CHANNEL_USERNAME,
         "text": text,
@@ -237,6 +259,61 @@ def post_job():
 
 
 # =========================================================
+# SOURCE CHANNEL -> TRANSLATE -> FORWARD JOB
+# =========================================================
+
+def translate_and_forward_job():
+    if not TRANSLATOR_BOT_TOKEN:
+        logger.warning(
+            "TRANSLATOR_BOT_TOKEN alteseTem - translate-forward sira "
+            "insu jemro yimokoral."
+        )
+        return
+
+    state = load_state()
+    last_id = state.get("last_source_msg_id", 0)
+
+    posts = fetch_source_posts(SOURCE_CHANNEL_USERNAME)
+    if not posts:
+        return
+
+    # Meji gize (last_id == 0) sirawun sinjemer, yalefut posts hulu wede
+    # channel'u aynelekim - kahun bicha jemro new addis posts yikeTelal.
+    if last_id == 0:
+        newest_id = posts[-1][0]
+        state["last_source_msg_id"] = newest_id
+        save_state(state)
+        logger.info(
+            f"Ke {SOURCE_CHANNEL_USERNAME} lay yalut yalefu posts ke'atirgum "
+            f"wich yiwetalu (baseline: {newest_id}). Ke'ahun jemro addis "
+            f"posts bicha yiterigemalu."
+        )
+        return
+
+    new_posts = [p for p in posts if p[0] > last_id]
+    if not new_posts:
+        return
+
+    for msg_id, original_text in new_posts:
+        translated = translate_to_amharic(original_text)
+        if not translated:
+            logger.warning(
+                f"Post {msg_id} altiregumem (translation altchalem) - "
+                f"wede huletegnaw round inleፍ, atalefim."
+            )
+            break  # eziyachin wede fit atehedm, be'ideregagem sile yizoral
+
+        full_text = translated + TRANSLATE_ATTRIBUTION
+        success = send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
+        if not success:
+            logger.warning(f"Post {msg_id} altiletefem, be'huletegnaw round inmokoral.")
+            break
+
+        state["last_source_msg_id"] = msg_id
+        save_state(state)
+
+
+# =========================================================
 # SCHEDULER SETUP
 # =========================================================
 
@@ -255,6 +332,17 @@ def run():
             id=f"post_{t}",
         )
         logger.info(f"Post scheduled at {t} ({TIMEZONE})")
+
+    scheduler.add_job(
+        translate_and_forward_job,
+        "interval",
+        minutes=TRANSLATE_CHECK_INTERVAL_MINUTES,
+        id="translate_forward",
+    )
+    logger.info(
+        f"Translate-forward ke @{SOURCE_CHANNEL_USERNAME} be'iyalu "
+        f"{TRANSLATE_CHECK_INTERVAL_MINUTES} deqiqa scheduled."
+    )
 
     try:
         scheduler.start()
