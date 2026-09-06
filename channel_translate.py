@@ -22,6 +22,29 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger("ibnabbas_bot.translate")
 
+# URL/link pattern: http(s)://..., www...., t.me/..., @username mentions
+_LINK_PATTERN = re.compile(
+    r"(https?://\S+)"        # http:// weyim https:// yalew link
+    r"|(www\.\S+)"            # www. bekemejemer link
+    r"|(t\.me/\S+)"           # t.me/... link
+    r"|(@[A-Za-z0-9_]{4,})",  # @channel_username mention
+    re.IGNORECASE,
+)
+
+
+def strip_links(text: str) -> str:
+    """Post text wist yalut hulum link'woch (http/https, www, t.me/...,
+    @mentions) sildo, netsa tekst bicha yimelesal. Betefit yalu blank
+    meseraTawoch yiseredalu."""
+    if not text:
+        return text
+    cleaned = _LINK_PATTERN.sub("", text)
+    # ke'link sile teserezu yizoral yehonu redundant space/newline yiredalu
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned)
+    cleaned = "\n".join(line.strip() for line in cleaned.split("\n"))
+    return cleaned.strip()
+
 
 def fetch_source_posts(source_username: str):
     """https://t.me/s/<username> lay yalut posts'n (id, text) tuple aድርጎ
@@ -103,4 +126,3 @@ def translate_to_amharic(text: str):
 
     translated = "".join(translated_chunks).strip()
     return translated or None
-              
