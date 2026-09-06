@@ -17,6 +17,7 @@ import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from content import POSTS
+from arabic_content import SHORT_TEXTS, LONG_TEXTS
 from channel_translate import fetch_source_posts, translate_to_amharic, strip_links
 
 # =========================================================
@@ -43,6 +44,12 @@ STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
 # yekefile file system yigefal, be'izhe date-based selesela beqa min
 # gize'im aminet yalew new).
 POST_EPOCH = date(2026, 1, 1)
+
+# ---------------------------------------------------------
+# EXTRA POSTS (achir/rezm - kel'arebegna mnach yeteserzu, be
+# post gize wede amarigna yiteregemalu) - beken 1 achir + 1 rezm
+# ---------------------------------------------------------
+EXTRA_POST_TIMES = {"short": "08:00", "long": "22:00"}
 
 # ---------------------------------------------------------
 # AI DYNAMIC CONTENT (optional) - AI addis yizet endifetir
@@ -301,6 +308,30 @@ def post_job(slot_time: str):
             save_state(state)
 
 
+def extra_post_job(kind: str):
+    """achir (short) weyim rezm (long) arebegna tsihuf be'file storage
+    saydegef, be'qen sile'sila (deterministic) yimeret, wede amarigna
+    yiteregumal, keza yileTfal."""
+    pool = SHORT_TEXTS if kind == "short" else LONG_TEXTS
+    if not pool:
+        return
+
+    days_passed = (date.today() - POST_EPOCH).days
+    idx = days_passed % len(pool)
+    arabic_text = pool[idx]
+
+    cleaned_text = strip_links(arabic_text)
+    translated = translate_to_amharic(cleaned_text)
+    if not translated:
+        logger.warning(
+            f"Extra post ({kind}, idx={idx}) altiregumem - yalfal, wede "
+            f"huletegnaw sesat ynesal."
+        )
+        return
+
+    send_message(translated)
+
+
 # =========================================================
 # SOURCE CHANNEL -> TRANSLATE -> FORWARD JOB
 # =========================================================
@@ -399,6 +430,18 @@ def run():
             id=f"post_{t}",
         )
         logger.info(f"Post scheduled at {t} ({TIMEZONE})")
+
+    for kind, t in EXTRA_POST_TIMES.items():
+        hour, minute = t.split(":")
+        scheduler.add_job(
+            extra_post_job,
+            "cron",
+            hour=int(hour),
+            minute=int(minute),
+            args=[kind],
+            id=f"extra_post_{kind}",
+        )
+        logger.info(f"Extra post ({kind}) scheduled at {t} ({TIMEZONE})")
 
     scheduler.add_job(
         translate_and_forward_job,
