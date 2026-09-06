@@ -11,6 +11,7 @@ Sira lememeriya (jemari yemihonu):
 import json
 import logging
 import os
+from datetime import date
 
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -35,6 +36,13 @@ TIMEZONE = "Africa/Addis_Ababa"
 
 # State file - yetalefew post yetederese eyalen lememezgeb
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
+
+# Fallback post index eyalefachew keqen (date) tegeba yisephefal - keza
+# Railway sildegim/siketam state.json bicha bitfetf, dagmo dagmo weyim
+# ye'atqodemu post attelefim (Railway be'ile'iginu redeploy sila'iderge
+# yekefile file system yigefal, be'izhe date-based selesela beqa min
+# gize'im aminet yalew new).
+POST_EPOCH = date(2026, 1, 1)
 
 # ---------------------------------------------------------
 # AI DYNAMIC CONTENT (optional) - AI addis yizet endifetir
@@ -100,6 +108,16 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f)
+
+
+def get_deterministic_index(slot_time: str) -> int:
+    """Fallback list wist yalewn post index be'qen (date) na be'sa'at slot
+    (06:00/13:00/19:00) meseret adirgo yiseraal - file storage atsafelegim,
+    bemulu yeqerebe (deterministic) new. Bihon Railway bota lay bota
+    sildegim/state.json bitgefa'im, dagmo dagmo post atileTfim."""
+    days_passed = (date.today() - POST_EPOCH).days
+    slot_index = POST_TIMES.index(slot_time)
+    return (days_passed * len(POST_TIMES) + slot_index) % len(POSTS)
 
 
 # =========================================================
@@ -226,7 +244,7 @@ def generate_ai_post(recent_topics):
 # POST JOB - yemiketel post yemewesd na yemileTF
 # =========================================================
 
-def post_job():
+def post_job(slot_time: str):
     state = load_state()
     history = state.get("ai_topic_history", [])
 
@@ -236,7 +254,7 @@ def post_job():
         full_text = f"{ai_post['text']}\n\n{ai_post['question']}"
         source = "AI"
     else:
-        idx = state.get("index", 0) % len(POSTS)
+        idx = get_deterministic_index(slot_time)
         post = POSTS[idx]
         full_text = f"{post['text']}\n\n{post['question']}"
         source = "fallback-list"
@@ -252,10 +270,7 @@ def post_job():
         if topic:
             history.append(topic)
             state["ai_topic_history"] = history[-AI_TOPIC_HISTORY_LIMIT:]
-    else:
-        state["index"] = (idx + 1) % len(POSTS)
-
-    save_state(state)
+            save_state(state)
 
 
 # =========================================================
@@ -329,6 +344,7 @@ def run():
             "cron",
             hour=int(hour),
             minute=int(minute),
+            args=[t],
             id=f"post_{t}",
         )
         logger.info(f"Post scheduled at {t} ({TIMEZONE})")
