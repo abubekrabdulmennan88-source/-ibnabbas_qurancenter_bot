@@ -48,9 +48,10 @@ POST_EPOCH = date(2026, 1, 1)
 # AI DYNAMIC CONTENT (optional) - AI addis yizet endifetir
 # ---------------------------------------------------------
 # Kihen key kalasqemetu bot'u endelogeg keta POSTS list eyeteqebele
-# yisera (fallback). Key litseffelgu keza: https://console.anthropic.com
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = "claude-sonnet-5"
+# yisera (fallback). Gemini API key be'itsa (card sayasfeleg) ke'izih
+# yagenyal: https://aistudio.google.com -> "Get API key"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # AI kahon post yetesera rieswoch (topics) tzareb - dagimo endayimeta
 # lekelakay yiyazal. Bicha yalefu N rieswoch bicha yizeker.
@@ -75,6 +76,15 @@ SOURCE_CHANNELS = [
     "Seerah_Anbiya",
     "Aqwal_Salaf",
     "Durar_Salaf",
+    "dorarnet_telegram",
+    "ArIslamway",
+    "qraan1",
+    "itsTheQuraan",
+    "qisasalanbiaa",
+    "Qssallqran",
+    "alahwaztarikharbi2831",
+    "earbbb",
+    "fkdudnvkd",
 ]
 
 # Sesat sesat (be'iminet) ye'sechid channel'un lemayet - polling interval
@@ -194,7 +204,7 @@ QEBADOWOCH (asigedaj yalebachew):
 
 
 def _extract_json(raw_text: str):
-    """Anthropic response text wisit yalewn JSON aweta."""
+    """AI response text wisit yalewn JSON aweta."""
     raw_text = raw_text.strip()
     if raw_text.startswith("```"):
         raw_text = raw_text.strip("`")
@@ -208,10 +218,10 @@ def _extract_json(raw_text: str):
 
 
 def generate_ai_post(recent_topics):
-    """Anthropic API teqemto addis (dagimo yalhone) post yifetral.
+    """Gemini API (be'itsa) teqemto addis (dagimo yalhone) post yifetral.
     Bicha sira sayseram (key alebet, network gudai, ...) None yimelesal -
     keza post_job() wist wede fallback list yihedal."""
-    if not ANTHROPIC_API_KEY:
+    if not GEMINI_API_KEY:
         return None
 
     avoid_text = ""
@@ -228,25 +238,26 @@ def generate_ai_post(recent_topics):
 
     try:
         resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_MODEL}:generateContent",
+            params={"key": GEMINI_API_KEY},
+            headers={"content-type": "application/json"},
             json={
-                "model": ANTHROPIC_MODEL,
-                "max_tokens": 600,
-                "system": AI_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": user_prompt}],
+                "system_instruction": {
+                    "parts": [{"text": AI_SYSTEM_PROMPT}]
+                },
+                "contents": [
+                    {"role": "user", "parts": [{"text": user_prompt}]}
+                ],
+                "generationConfig": {"maxOutputTokens": 600},
             },
             timeout=30,
         )
         resp.raise_for_status()
         data = resp.json()
         raw_text = "".join(
-            block.get("text", "") for block in data.get("content", [])
-            if block.get("type") == "text"
+            part.get("text", "")
+            for part in data["candidates"][0]["content"]["parts"]
         )
         parsed = _extract_json(raw_text)
         if "text" not in parsed or "question" not in parsed:
