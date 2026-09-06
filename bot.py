@@ -17,7 +17,7 @@ import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from content import POSTS
-from channel_translate import fetch_source_posts, translate_to_amharic
+from channel_translate import fetch_source_posts, translate_to_amharic, strip_links
 
 # =========================================================
 # CONFIG - Eziya laye configuration'wochn adirgu
@@ -57,18 +57,28 @@ ANTHROPIC_MODEL = "claude-sonnet-5"
 AI_TOPIC_HISTORY_LIMIT = 40
 
 # ---------------------------------------------------------
-# SOURCE CHANNEL TRANSLATION (optional) - kelela public channel
+# SOURCE CHANNEL TRANSLATION (optional) - kelela public channel(woch)
 # addis post gimito wede Amarigna yitergimal, wede @ibnuabbas_hara yiletfal
 # ---------------------------------------------------------
 # Ke "https://t.me/Awraq_Alyasmin" bicha ye"Awraq_Alyasmin" ken new
-# yemiferelgew (@ weyim t.me/ sayhon).
-SOURCE_CHANNEL_USERNAME = "Awraq_Alyasmin"
+# yemiferelgew (@ weyim t.me/ sayhon). Endezih bezu channel'wochn
+# mecheveT yichalal - bicha list wist meMEmemer bicha new yasfeligew.
+SOURCE_CHANNELS = [
+    "Awraq_Alyasmin",
+    "mutshabh",
+    "gghjgvvgg",
+    "Tadabor_quran",
+    "Ayaat_Qurania",
+    "Bukhari_Muslim_1",
+    "Ahadeeth_Sahiha",
+    "Qisas_AlAnbiya",
+    "Seerah_Anbiya",
+    "Aqwal_Salaf",
+    "Durar_Salaf",
+]
 
 # Sesat sesat (be'iminet) ye'sechid channel'un lemayet - polling interval
 TRANSLATE_CHECK_INTERVAL_MINUTES = 15
-
-# Ke'iyalu translated post gar yemiketel attribution mesetr
-TRANSLATE_ATTRIBUTION = "\n\n🔗 ምንጭ፦ @Awraq_Alyasmin"
 
 # Yihe tirgum post'wochn yemileTfew wediya adis bot ("Translator Abubeker
 # Abdu") token - ke ne'baru bot yileyal. Yihe bot @ibnuabbas_hara channel
@@ -98,11 +108,18 @@ def load_state():
                 data = json.load(f)
                 data.setdefault("index", 0)
                 data.setdefault("ai_topic_history", [])
-                data.setdefault("last_source_msg_id", 0)
+                data.setdefault("last_source_msg_id", {})
+                # Yalefew version (yaltemokete) "last_source_msg_id" ande
+                # channel bicha (int) yiyazal neber - kahun bezu channel
+                # dict endihonu inqeyir (be Awraq_Alyasmin sim inaseral).
+                if isinstance(data["last_source_msg_id"], int):
+                    data["last_source_msg_id"] = {
+                        "Awraq_Alyasmin": data["last_source_msg_id"]
+                    }
                 return data
         except Exception:
             logger.warning("State file could not be read, kesera enjemralen.")
-    return {"index": 0, "ai_topic_history": [], "last_source_msg_id": 0}
+    return {"index": 0, "ai_topic_history": [], "last_source_msg_id": {}}
 
 
 def save_state(state):
@@ -277,18 +294,14 @@ def post_job(slot_time: str):
 # SOURCE CHANNEL -> TRANSLATE -> FORWARD JOB
 # =========================================================
 
-def translate_and_forward_job():
-    if not TRANSLATOR_BOT_TOKEN:
-        logger.warning(
-            "TRANSLATOR_BOT_TOKEN alteseTem - translate-forward sira "
-            "insu jemro yimokoral."
-        )
-        return
+def _process_one_channel(state, source_username):
+    """Ande source channel bicha addis posts yifelegal, yitirgumal, na
+    yileTfal. state'un be'place yasተካክላል (save_state ye'silejemer sira
+    new)."""
+    last_ids = state.setdefault("last_source_msg_id", {})
+    last_id = last_ids.get(source_username, 0)
 
-    state = load_state()
-    last_id = state.get("last_source_msg_id", 0)
-
-    posts = fetch_source_posts(SOURCE_CHANNEL_USERNAME)
+    posts = fetch_source_posts(source_username)
     if not posts:
         return
 
@@ -296,10 +309,10 @@ def translate_and_forward_job():
     # channel'u aynelekim - kahun bicha jemro new addis posts yikeTelal.
     if last_id == 0:
         newest_id = posts[-1][0]
-        state["last_source_msg_id"] = newest_id
+        last_ids[source_username] = newest_id
         save_state(state)
         logger.info(
-            f"Ke {SOURCE_CHANNEL_USERNAME} lay yalut yalefu posts ke'atirgum "
+            f"Ke {source_username} lay yalut yalefu posts ke'atirgum "
             f"wich yiwetalu (baseline: {newest_id}). Ke'ahun jemro addis "
             f"posts bicha yiterigemalu."
         )
@@ -309,23 +322,50 @@ def translate_and_forward_job():
     if not new_posts:
         return
 
+    attribution = f"\n\n🔗 ምንጭ፦ @{source_username}"
+
     for msg_id, original_text in new_posts:
-        translated = translate_to_amharic(original_text)
+        cleaned_text = strip_links(original_text)
+        if not cleaned_text:
+            # Post'u link bicha (ke link wich lela tekst yelewim) sinehon -
+            # ke link mesarez behuala rikika neger sile alelekefen, ynleFal.
+            last_ids[source_username] = msg_id
+            save_state(state)
+            continue
+
+        translated = translate_to_amharic(cleaned_text)
         if not translated:
             logger.warning(
-                f"Post {msg_id} altiregumem (translation altchalem) - "
-                f"wede huletegnaw round inleፍ, atalefim."
+                f"Post {msg_id} (ke {source_username}) altiregumem "
+                f"(translation altchalem) - wede huletegnaw round inleፍ, "
+                f"atalefim."
             )
             break  # eziyachin wede fit atehedm, be'ideregagem sile yizoral
 
-        full_text = translated + TRANSLATE_ATTRIBUTION
+        full_text = translated + attribution
         success = send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
         if not success:
-            logger.warning(f"Post {msg_id} altiletefem, be'huletegnaw round inmokoral.")
+            logger.warning(
+                f"Post {msg_id} (ke {source_username}) altiletefem, "
+                f"be'huletegnaw round inmokoral."
+            )
             break
 
-        state["last_source_msg_id"] = msg_id
+        last_ids[source_username] = msg_id
         save_state(state)
+
+
+def translate_and_forward_job():
+    if not TRANSLATOR_BOT_TOKEN:
+        logger.warning(
+            "TRANSLATOR_BOT_TOKEN alteseTem - translate-forward sira "
+            "insu jemro yimokoral."
+        )
+        return
+
+    state = load_state()
+    for source_username in SOURCE_CHANNELS:
+        _process_one_channel(state, source_username)
 
 
 # =========================================================
@@ -355,8 +395,9 @@ def run():
         minutes=TRANSLATE_CHECK_INTERVAL_MINUTES,
         id="translate_forward",
     )
+    channels_str = ", ".join(f"@{c}" for c in SOURCE_CHANNELS)
     logger.info(
-        f"Translate-forward ke @{SOURCE_CHANNEL_USERNAME} be'iyalu "
+        f"Translate-forward ke {channels_str} be'iyalu "
         f"{TRANSLATE_CHECK_INTERVAL_MINUTES} deqiqa scheduled."
     )
 
