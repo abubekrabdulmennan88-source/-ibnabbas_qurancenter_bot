@@ -11,6 +11,7 @@ Sira lememeriya (jemari yemihonu):
 import json
 import logging
 import os
+import time
 from datetime import date
 
 import requests
@@ -184,6 +185,40 @@ def send_message(text: str, token: str = None) -> bool:
             return False
     except Exception as e:
         logger.error(f"Network/send error: {e}")
+        return False
+
+
+def send_photo(photo_url: str, caption: str = "", token: str = None) -> bool:
+    """photo_url (Telegram serversu betekemetu URL) photo'n keza,
+    caption gara (kalele) yiletfal. Telegram sile'irsu photo'n yiwerdal -
+    inya bota download ma'derg alasfelegim."""
+    token = token or BOT_TOKEN
+    if not token or token == "PASTE_YOUR_BOT_TOKEN_HERE":
+        logger.error(
+            "BOT_TOKEN alteseTem! Environment variable BOT_TOKEN sisu weyim "
+            "bot.py wisit teteka."
+        )
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    payload = {
+        "chat_id": CHANNEL_USERNAME,
+        "photo": photo_url,
+    }
+    if caption:
+        payload["caption"] = caption[:1024]  # Telegram caption limit
+        payload["parse_mode"] = "HTML"
+    try:
+        resp = requests.post(url, data=payload, timeout=30)
+        data = resp.json()
+        if data.get("ok"):
+            logger.info("Photo teleTffwal!")
+            return True
+        else:
+            logger.error(f"Telegram error (sendPhoto): {data}")
+            return False
+    except Exception as e:
+        logger.error(f"Network/send error (sendPhoto): {e}")
         return False
 
 
@@ -366,26 +401,39 @@ def _process_one_channel(state, source_username):
 
     attribution = f"\n\n🔗 ምንጭ፦ @{source_username}"
 
-    for msg_id, original_text in new_posts:
-        cleaned_text = strip_links(original_text)
-        if not cleaned_text:
-            # Post'u link bicha (ke link wich lela tekst yelewim) sinehon -
-            # ke link mesarez behuala rikika neger sile alelekefen, ynleFal.
+    for msg_id, original_text, photo_url in new_posts:
+        cleaned_text = strip_links(original_text) if original_text else ""
+
+        if not cleaned_text and not photo_url:
+            # Link bicha (weyim ken neger) yehone, gara photo yelewim post -
+            # inleFal.
             last_ids[source_username] = msg_id
             save_state(state)
             continue
 
-        translated = translate_to_amharic(cleaned_text)
-        if not translated:
-            logger.warning(
-                f"Post {msg_id} (ke {source_username}) altiregumem "
-                f"(translation altchalem) - wede huletegnaw round inleፍ, "
-                f"atalefim."
-            )
-            break  # eziyachin wede fit atehedm, be'ideregagem sile yizoral
+        translated = ""
+        if cleaned_text:
+            translated = translate_to_amharic(cleaned_text)
+            if translated is None:
+                logger.warning(
+                    f"Post {msg_id} (ke {source_username}) altiregumem "
+                    f"(translation altchalem) - wede huletegnaw round "
+                    f"inleፍ, atalefim."
+                )
+                break  # eziyachin wede fit atehedm, be'ideregagem sile yizoral
 
-        full_text = translated + attribution
-        success = send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
+        full_text = (translated + attribution) if translated else attribution.strip()
+
+        if photo_url:
+            # Photo gara (caption endihonu) weyim photo bicha (text yelewim)
+            success = send_photo(photo_url, caption=full_text, token=TRANSLATOR_BOT_TOKEN)
+            if success and len(full_text) > 1024:
+                # Caption 1024 char bicha silemiWesed, yeqerew tekst wede
+                # kalele message iniLeFew.
+                send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
+        else:
+            success = send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
+
         if not success:
             logger.warning(
                 f"Post {msg_id} (ke {source_username}) altiletefem, "
@@ -408,6 +456,7 @@ def translate_and_forward_job():
     state = load_state()
     for source_username in SOURCE_CHANNELS:
         _process_one_channel(state, source_username)
+        time.sleep(2)  # channel'woch mekakel ereft - rate-limit inayaggagemet
 
 
 # =========================================================
