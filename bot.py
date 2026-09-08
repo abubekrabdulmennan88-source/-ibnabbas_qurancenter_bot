@@ -417,10 +417,17 @@ def _process_one_channel(state, source_username):
             if translated is None:
                 logger.warning(
                     f"Post {msg_id} (ke {source_username}) altiregumem "
-                    f"(translation altchalem) - wede huletegnaw round "
-                    f"inleፍ, atalefim."
+                    f"(translation altchalem) - yihen post bicha inzeleለው, "
+                    f"wede kealla inaselፍ (atqemim)."
                 )
-                break  # eziyachin wede fit atehedm, be'ideregagem sile yizoral
+                # Ke'lay 'break' silneber, ande post bicha bemeqoyet kualu
+                # posts yizeguallu neber (Google Translate 429 gize 15+
+                # deqiqa lemesenbet yichalal neber). Ahun 'continue'
+                # bemeqoyet, yehen post bicha inzeleለው, kealla posts
+                # gedaw wede fit yigedalu.
+                last_ids[source_username] = msg_id
+                save_state(state)
+                continue
 
         full_text = (translated + attribution) if translated else attribution.strip()
 
@@ -431,15 +438,23 @@ def _process_one_channel(state, source_username):
                 # Caption 1024 char bicha silemiWesed, yeqerew tekst wede
                 # kalele message iniLeFew.
                 send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
+            if not success:
+                # Photo'u alተሳካም (lemisale Telegram photo URL'un mamet
+                # alchalem) - text bicha lelekፍ inሞክር, keza inleFal enji
+                # yihe post limananim aynor (kealla post'woch ayikodም).
+                logger.warning(
+                    f"Post {msg_id} (ke {source_username}) photo "
+                    f"altiletefem - text bicha inlekፍ inmokoral."
+                )
+                success = send_message(full_text or attribution.strip(), token=TRANSLATOR_BOT_TOKEN)
         else:
             success = send_message(full_text, token=TRANSLATOR_BOT_TOKEN)
 
         if not success:
             logger.warning(
-                f"Post {msg_id} (ke {source_username}) altiletefem, "
-                f"be'huletegnaw round inmokoral."
+                f"Post {msg_id} (ke {source_username}) hulunም neger "
+                f"altiletefem - yihen post inzeleለው, wede kealla inaselፍ."
             )
-            break
 
         last_ids[source_username] = msg_id
         save_state(state)
