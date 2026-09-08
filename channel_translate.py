@@ -15,6 +15,7 @@ webpage'n eynetekemetne.
 import html
 import json
 import logging
+import os
 import re
 import time
 
@@ -22,6 +23,13 @@ import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger("ibnabbas_bot.translate")
+
+# Gemini (be'itsa) API key - GEMINI_API_KEY environment variable be'bot.py
+# tekemakayanet yiseral (Railway lay yetesetefe). Google Translate ye'wich
+# (unofficial) endpoint bota bota "429 Too Many Requests" bicha aynseral
+# silhone, Gemini official API tekemetenal - yishaltal.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # URL/link pattern: http(s)://..., www...., t.me/..., @username mentions
 _LINK_PATTERN = re.compile(
@@ -100,56 +108,78 @@ def fetch_source_posts(source_username: str):
     return posts
 
 
-def translate_to_amharic(text: str):
-    """Google Translate ye'wich (unofficial, netsa, API key yalasfeleg)
-    endpoint teqemto tekst wede Amarigna yitergumal. Betchigir None
-    yimelesal.
+def _translate_via_gemini(text: str):
+    """Gemini API (be'itsa, official) teqemto tekst wede Amarigna
+    yitergumal. Key kaleseteme None yimelesal."""
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_MODEL}:generateContent",
+            params={"key": GEMINI_API_KEY},
+            headers={"content-type": "application/json"},
+            json={
+                "system_instruction": {
+                    "parts": [{
+                        "text": (
+                            "Antchi professional translator neh. Yemitset "
+                            "tekstun wede Amarigna bicha tergum. "
+                            "Ye'islamawi/ye'kuranawi ewnetegnnet (Quran "
+                            "ayat, hadith, scholar simoch) inde'yalew "
+                            "temeleket, be'metirgum yizoral. Bicha "
+                            "yeteregeme tekst mles - lela aymelekt "
+                            "(explanation, quote marks, meglecha kalat)."
+                        )
+                    }]
+                },
+                "contents": [{"role": "user", "parts": [{"text": text}]}],
+                "generationConfig": {"maxOutputTokens": 2048},
+            },
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            logger.warning("Gemini 429 (bezu tebik).")
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        piece = "".join(
+            part.get("text", "")
+            for part in data["candidates"][0]["content"]["parts"]
+        )
+        return piece.strip() or None
+    except Exception as e:
+        logger.warning(f"Gemini translation altichalem: {e}")
+        return None
 
-    Google's endpoint "429 Too Many Requests" bicha sinemelis (bezu
-    channel'wochn be'irat sile'inifeleg sihon), 1-2 gize be'igiziyawi
-    (backoff) inedegemewalen."""
-    chunk_size = 4500
+
+def translate_to_amharic(text: str):
+    """Tekst wede Amarigna yitergumal (Gemini API teqemto, be'itsa,
+    official). Betchigir None yimelesal.
+
+    Gemini "429" sinemelis 2 gize be'igiziyawi (backoff) inedegemewalen."""
+    chunk_size = 6000
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [text]
 
     translated_chunks = []
     for chunk in chunks:
         piece = None
         for attempt in range(3):
-            try:
-                resp = requests.get(
-                    "https://translate.googleapis.com/translate_a/single",
-                    params={
-                        "client": "gtx",
-                        "sl": "auto",
-                        "tl": "am",
-                        "dt": "t",
-                        "q": chunk,
-                    },
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; IbnAbbasBot/1.0)"},
-                    timeout=20,
-                )
-                if resp.status_code == 429:
-                    wait_s = 5 * (attempt + 1)
-                    logger.warning(
-                        f"Google Translate 429 (bezu tebik) - {wait_s} "
-                        f"second qoyto indegena inmokoral (attempt {attempt + 1}/3)."
-                    )
-                    time.sleep(wait_s)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                # data[0] is a list of [translated_segment, original_segment, ...]
-                piece = "".join(seg[0] for seg in data[0] if seg[0])
+            piece = _translate_via_gemini(chunk)
+            if piece is not None:
                 break
-            except Exception as e:
-                logger.warning(f"Translation altichalem: {e}")
-                return None
+            wait_s = 5 * (attempt + 1)
+            logger.warning(
+                f"Translation attempt {attempt + 1}/3 altchalem - {wait_s} "
+                f"second qoyto indegena inmokoral."
+            )
+            time.sleep(wait_s)
 
         if piece is None:
-            logger.warning("Translation ke 429 behuala 3 gize kalተሳካ, yalfal.")
+            logger.warning("Translation ke 3 gize behuala kalteseka, yalfal.")
             return None
         translated_chunks.append(piece)
-        time.sleep(1)  # chunks mekakel tinishu ereft, rate-limit inayaggagemet
+        time.sleep(1)  # chunks mekakel tinishu ereft
 
     translated = "".join(translated_chunks).strip()
     return translated or None
