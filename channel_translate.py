@@ -29,7 +29,7 @@ logger = logging.getLogger("ibnabbas_bot.translate")
 # (unofficial) endpoint bota bota "429 Too Many Requests" bicha aynseral
 # silhone, Gemini official API tekemetenal - yishaltal.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # URL/link pattern: http(s)://..., www...., t.me/..., @username mentions
 _LINK_PATTERN = re.compile(
