@@ -59,7 +59,7 @@ EXTRA_POST_TIMES = {"short": "08:00", "long": "22:00"}
 # yisera (fallback). Gemini API key be'itsa (card sayasfeleg) ke'izih
 # yagenyal: https://aistudio.google.com -> "Get API key"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # AI kahon post yetesera rieswoch (topics) tzareb - dagimo endayimeta
 # lekelakay yiyazal. Bicha yalefu N rieswoch bicha yizeker.
